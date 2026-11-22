@@ -11,6 +11,8 @@
   or list.
 - [Custom Tonies API](./api/custom-tonies.md) — the `/api/toniesCustomJson*`
   endpoints.
+- [Custom players API](./api/custom-players.md) — `/api/registerDevice` and the
+  endpoints a self-built (non-Toniebox) player needs.
 
 For end-user setup instructions, see the
 [project documentation site](https://toniebox-reverse-engineering.github.io/docs/tools/teddycloud/)

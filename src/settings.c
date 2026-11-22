@@ -164,7 +164,7 @@ static void option_map_init(uint8_t settingsId)
     OPTION_INTERNAL_STRING("commonName", &settings->commonName, "default", "common name of the certificate (for overlays)", LEVEL_NONE)
     OPTION_INTERNAL_STRING("boxName", &settings->boxName, "Toniebox", "Name of the box", LEVEL_NONE)
     OPTION_INTERNAL_STRING("boxModel", &settings->boxModel, "", "Model of the box", LEVEL_NONE)
-    OPTION_INTERNAL_UNSIGNED("boxVersion", &settings->boxVersion, BOX_UNKNOWN, BOX_UNKNOWN, BOX_TB2, "Version (IC) of the box, persisted from the User Agent", LEVEL_NONE)
+    OPTION_INTERNAL_UNSIGNED("boxVersion", &settings->boxVersion, BOX_UNKNOWN, BOX_UNKNOWN, BOX_CUSTOM, "Version (IC) of the box, persisted from the User Agent", LEVEL_NONE)
 
     OPTION_TREE_DESC("log", "Logging", LEVEL_DETAIL)
     OPTION_UNSIGNED("log.level", &settings->log.level, 4, 0, 6, "Loglevel", "0=off - 6=verbose", LEVEL_DETAIL)
@@ -646,6 +646,121 @@ settings_t *get_settings_cn(const char *commonName)
     }
     mutex_unlock(MUTEX_SETTINGS);
     return get_settings();
+}
+
+/* copies a display text without control characters (they would break the ini file), at most max_len characters */
+static char *settings_clean_text(const char *text, size_t max_len)
+{
+    char *clean = osAllocMem(max_len + 1);
+    if (clean == NULL)
+    {
+        return NULL;
+    }
+    size_t len = 0;
+    for (const char *src = text; *src && len < max_len; src++)
+    {
+        if ((unsigned char)*src >= 0x20 && *src != 0x7F)
+        {
+            clean[len++] = *src;
+        }
+    }
+    clean[len] = '\0';
+    return clean;
+}
+
+settings_t *settings_register_device(const char *deviceId, const char *name, const char *model, bool *created)
+{
+    if (created)
+    {
+        *created = false;
+    }
+    if (deviceId == NULL)
+    {
+        return NULL;
+    }
+    char *id = settings_sanitize_box_id(deviceId);
+    if (id == NULL)
+    {
+        return NULL;
+    }
+    size_t idLen = osStrlen(id);
+    /* the ID is used as given (no silently dropped characters) and has to fit the overlay buffers */
+    if (idLen < 6 || idLen > 15 || idLen != osStrlen(deviceId))
+    {
+        osFreeMem(id);
+        return NULL;
+    }
+    char *cleanName = (name && name[0]) ? settings_clean_text(name, 64) : NULL;
+    char *cleanModel = (model && model[0]) ? settings_clean_text(model, 32) : NULL;
+    settings_t *result = NULL;
+    int slot = -1;
+
+    mutex_lock(MUTEX_SETTINGS);
+    for (size_t i = 1; i < MAX_OVERLAYS; i++)
+    {
+        if (Settings_Overlay[i].internal.config_used && osStrcasecmp(Settings_Overlay[i].commonName, id) == 0)
+        {
+            slot = (int)i;
+            break;
+        }
+    }
+    if (slot > 0)
+    {
+        if (Settings_Overlay[slot].boxVersion == BOX_CUSTOM)
+        {
+            /* the name is only set when the player is created: afterwards the web UI owns it */
+            bool changed = false;
+            if (cleanModel && cleanModel[0] && osStrcmp(Settings_Overlay[slot].boxModel, cleanModel) != 0)
+            {
+                settings_set_string_id("boxModel", cleanModel, slot);
+                changed = true;
+            }
+            if (changed)
+            {
+                settings_save_ovl(true);
+            }
+            result = &Settings_Overlay[slot];
+        }
+        else
+        {
+            TRACE_WARNING("Device ID %s belongs to a Toniebox, not registering a custom player with it\r\n", id);
+        }
+    }
+    else
+    {
+        for (size_t i = 1; i < MAX_OVERLAYS; i++)
+        {
+            if (!Settings_Overlay[i].internal.config_used)
+            {
+                char *defaultName = custom_asprintf("Custom player %s", id);
+                settings_set_string_id("commonName", id, i);
+                settings_set_string_id("internal.overlayUniqueId", id, i);
+                settings_set_string_id("boxName", (cleanName && cleanName[0]) ? cleanName : defaultName, i);
+                settings_set_string_id("boxModel", (cleanModel && cleanModel[0]) ? cleanModel : "", i);
+                settings_set_unsigned_id("boxVersion", BOX_CUSTOM, i);
+                settings_generate_internal_dirs(&Settings_Overlay[i]);
+                Settings_Overlay[i].internal.config_used = true;
+                settings_save_ovl(true);
+                osFreeMem(defaultName);
+                result = &Settings_Overlay[i];
+                if (created)
+                {
+                    *created = true;
+                }
+                break;
+            }
+        }
+        if (result == NULL)
+        {
+            TRACE_WARNING("Could not register custom player %s, too many overlays.\r\n", id);
+        }
+    }
+    mutex_unlock(MUTEX_SETTINGS);
+
+    osFreeMem(cleanName);
+    osFreeMem(cleanModel);
+    osFreeMem(id);
+    return result;
 }
 
 uint8_t get_overlay_id(const char *overlay_unique_id)

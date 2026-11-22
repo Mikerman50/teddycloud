@@ -54,6 +54,7 @@ typedef enum
     BOX_CC3235 = 2,
     BOX_ESP32 = 3,
     BOX_TB2 = 4,
+    BOX_CUSTOM = 5, /* not a Toniebox: a self-built player that registered through /api/registerDevice */
 } settings_box_type;
 typedef enum
 {
@@ -542,6 +543,20 @@ settings_t *get_settings();
 settings_t *get_settings_ovl(const char *overlay_unique_id);
 settings_t *get_settings_id(uint8_t settingsId);
 settings_t *get_settings_cn(const char *commonName);
+
+/**
+ * @brief Finds or creates the overlay of a custom (non-Toniebox) player.
+ *
+ * Unlike get_settings_cn() no client certificate paths are overlaid: a custom player has no box
+ * certificate and only talks to the web API.
+ *
+ * @param deviceId  Stable ID of the device, 6-15 characters of [A-Za-z0-9_-] (e.g. its MAC address).
+ * @param name      Display name for a new player (NULL/"": a default); ignored for a known one.
+ * @param model     Model text, or NULL/"" to keep the current one.
+ * @param created   Set to true if a new overlay was created (may be NULL).
+ * @return The overlay, or NULL if the ID is invalid, belongs to a Toniebox or no overlay is free.
+ */
+settings_t *settings_register_device(const char *deviceId, const char *name, const char *model, bool *created);
 uint8_t get_overlay_id(const char *overlay_unique_id);
 
 void settings_resolve_dir(char **resolvedPath, char *path, char *basePath);
