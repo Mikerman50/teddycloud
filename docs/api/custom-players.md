@@ -20,15 +20,15 @@ POST /api/registerDevice?id=<id>[&name=<text>][&model=<text>]
 | Parameter | |
 | --- | --- |
 | `id` | Required. A stable ID of the device, 6-15 characters of `A-Z a-z 0-9 _ -`. The MAC address without colons (12 hex digits) is a good choice, it is what Tonieboxes use. |
-| `name` | Optional display name, up to 64 characters. Default: `Custom player <id>`. |
-| `model` | Optional model text, up to 32 characters, e.g. the project name. |
+| `name` | Optional display name for a new player, up to 64 characters. Default: `Custom player <id>`. |
+| `model` | Optional model text, up to 32 characters, e.g. the project name and firmware version. |
 
 Control characters are dropped from `name` and `model`.
 
 The call is idempotent: a player calls it whenever it connects. The first call creates
-the overlay; later calls refresh the last-seen time and IP, and update the name or model
-when one is given and differs from the stored one. A name changed in the web UI is
-therefore only kept if the player stops sending `name`.
+the overlay; later calls refresh the last-seen time and IP and update the model when one
+is given. The name is only taken when the player is created, so renaming it in the web
+UI sticks.
 
 Response `200`, `text/json`:
 

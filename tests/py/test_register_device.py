@@ -55,19 +55,21 @@ def test_register_lists_the_device():
 
 
 def test_register_again_updates_instead_of_duplicating():
-    assert register("0011223344aa", "First name")[0] == 200
+    assert register("0011223344aa", "First name", "v1")[0] == 200
     status, body = register("0011223344aa", "Second name", "v2")
     assert status == 200, body
     reply = json.loads(body)
     assert reply["created"] is False
-    assert reply["boxName"] == "Second name"
+    # the name belongs to the web UI once the player exists, the model follows the player
+    assert reply["boxName"] == "First name"
+    assert reply["boxModel"] == "v2"
     listed = [b for b in boxes().values() if b["commonName"].lower() == "0011223344aa"]
     assert len(listed) == 1
-    assert listed[0]["boxModel"] == "v2"
 
-    # no name given: the stored one is kept
+    # nothing given: both are kept
     status, body = register("0011223344aa")
-    assert status == 200 and json.loads(body)["boxName"] == "Second name"
+    reply = json.loads(body)
+    assert status == 200 and reply["boxName"] == "First name" and reply["boxModel"] == "v2"
 
 
 def test_default_name():

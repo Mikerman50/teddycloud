@@ -708,12 +708,8 @@ settings_t *settings_register_device(const char *deviceId, const char *name, con
     {
         if (Settings_Overlay[slot].boxVersion == BOX_CUSTOM)
         {
+            /* the name is only set when the player is created: afterwards the web UI owns it */
             bool changed = false;
-            if (cleanName && cleanName[0] && osStrcmp(Settings_Overlay[slot].boxName, cleanName) != 0)
-            {
-                settings_set_string_id("boxName", cleanName, slot);
-                changed = true;
-            }
             if (cleanModel && cleanModel[0] && osStrcmp(Settings_Overlay[slot].boxModel, cleanModel) != 0)
             {
                 settings_set_string_id("boxModel", cleanModel, slot);

@@ -551,7 +551,7 @@ settings_t *get_settings_cn(const char *commonName);
  * certificate and only talks to the web API.
  *
  * @param deviceId  Stable ID of the device, 6-15 characters of [A-Za-z0-9_-] (e.g. its MAC address).
- * @param name      Display name, or NULL/"" to keep the current one.
+ * @param name      Display name for a new player (NULL/"": a default); ignored for a known one.
  * @param model     Model text, or NULL/"" to keep the current one.
  * @param created   Set to true if a new overlay was created (may be NULL).
  * @return The overlay, or NULL if the ID is invalid, belongs to a Toniebox or no overlay is free.
