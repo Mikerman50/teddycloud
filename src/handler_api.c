@@ -5023,6 +5023,286 @@ bool isHexString(const char *buf, size_t maxLen)
     return isHex;
 }
 
+/* ---- picture timeline of a TAF: pictures a player with a screen shows while the story plays.
+   A sidecar file next to the TAF, "<name>.timeline.json" for "<name>.taf", lists them:
+     { "images": [ { "track": 1, "at": "0:20", "image": "forest.jpg" }, ... ] }
+   The image paths are relative to the folder of the TAF. See docs/api/tag-timeline.md. */
+#define TIMELINE_SUFFIX ".timeline.json"
+#define TIMELINE_MAX_FILE_SIZE (64 * 1024)
+#define TIMELINE_MAX_ENTRIES 200
+
+/* path of the timeline sidecar of the local TAF a tag plays, NULL if it plays no local file; caller frees */
+static char *timelineSidecarPath(tonie_info_t *tafInfo)
+{
+    if (tafInfo == NULL || tafInfo->contentPath == NULL || tafInfo->contentPath[0] == '\0')
+    {
+        return NULL;
+    }
+    if (tafInfo->json._source_type != CT_SOURCE_NONE && tafInfo->json._source_type != CT_SOURCE_TAF)
+    {
+        return NULL;
+    }
+    size_t len = osStrlen(tafInfo->contentPath);
+    if (len > 4 && osStrcasecmp(&tafInfo->contentPath[len - 4], ".taf") == 0)
+    {
+        len -= 4;
+    }
+    return custom_asprintf("%.*s%s", (int)len, tafInfo->contentPath, TIMELINE_SUFFIX);
+}
+
+/* an image path as written in a timeline: relative, inside the folder, no drive or scheme */
+static bool timelineImageNameOk(const char *name)
+{
+    size_t len = osStrlen(name);
+    if (len == 0 || len > 255 || name[0] == '/' || name[0] == '\\')
+    {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++)
+    {
+        unsigned char c = (unsigned char)name[i];
+        if (c < 0x20 || c == ':' || c == '\\')
+        {
+            return false;
+        }
+        if (c == '.' && name[i + 1] == '.' && (i == 0 || name[i - 1] == '/') && (name[i + 2] == '/' || name[i + 2] == '\0'))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* percent-encodes a path for use in an URL, '/' is kept; caller frees */
+static char *timelineUrlEncodePath(const char *path)
+{
+    size_t len = osStrlen(path);
+    char *out = osAllocMem(len * 3 + 1);
+    if (out == NULL)
+    {
+        return NULL;
+    }
+    char *dst = out;
+    for (size_t i = 0; i < len; i++)
+    {
+        unsigned char c = (unsigned char)path[i];
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~' || c == '/')
+        {
+            *dst++ = (char)c;
+        }
+        else
+        {
+            dst += osSprintf(dst, "%%%02X", c);
+        }
+    }
+    *dst = '\0';
+    return out;
+}
+
+/* the URL a file below the library or content directory is served at, NULL if it is in neither; caller frees */
+static char *timelineFileUrl(const char *filePath, settings_t *settings)
+{
+    const char *roots[2] = {settings->internal.librarydirfull, settings->internal.contentdirfull};
+    for (size_t i = 0; i < 2; i++)
+    {
+        size_t rootLen = roots[i] ? osStrlen(roots[i]) : 0;
+        if (rootLen == 0 || osStrncmp(filePath, roots[i], rootLen) != 0 || filePath[rootLen] != PATH_SEPARATOR)
+        {
+            continue;
+        }
+        char *rel = strdup(&filePath[rootLen]);
+        if (rel == NULL)
+        {
+            return NULL;
+        }
+        for (char *p = rel; *p; p++)
+        {
+            if (*p == PATH_SEPARATOR)
+            {
+                *p = '/';
+            }
+        }
+        char *encoded = timelineUrlEncodePath(rel);
+        osFreeMem(rel);
+        if (encoded == NULL)
+        {
+            return NULL;
+        }
+        char *url = (i == 0) ? custom_asprintf("/content%s?special=library", encoded)
+                             : custom_asprintf("/content%s?overlay=%s", encoded, settings->internal.overlayUniqueId);
+        osFreeMem(encoded);
+        return url;
+    }
+    return NULL;
+}
+
+error_t handleApiTagTimeline(HttpConnection *connection, const char_t *uri, const char_t *queryString, client_ctx_t *client_ctx)
+{
+    char overlay[16];
+    const char *rootPath = NULL;
+    char ruid[17];
+    osStrcpy(ruid, "");
+
+    if (queryPrepare(queryString, &rootPath, overlay, sizeof(overlay), &client_ctx->settings) != NO_ERROR)
+    {
+        return ERROR_FAILURE;
+    }
+    if (!queryGet(queryString, "ruid", ruid, sizeof(ruid)) || osStrlen(ruid) != 16 || !isHexString(ruid, 16))
+    {
+        return ERROR_NOT_FOUND;
+    }
+    for (size_t i = 0; i < 16; i++)
+    {
+        ruid[i] = tolower((unsigned char)ruid[i]);
+    }
+
+    char *tagPath = custom_asprintf("%.8s%c%.8s", &ruid[0], PATH_SEPARATOR, &ruid[8]);
+    for (size_t i = 0; tagPath[i] != '\0'; i++)
+    {
+        tagPath[i] = toupper((unsigned char)tagPath[i]);
+    }
+    char *fullTagPath = custom_asprintf("%s%c%s", client_ctx->settings->internal.contentdirfull, PATH_SEPARATOR, tagPath);
+    char *fullJsonPath = custom_asprintf("%s.json", fullTagPath);
+    osFreeMem(tagPath);
+
+    char *timelinePath = NULL;
+    if (fsFileExists(fullJsonPath))
+    {
+        tonie_info_t *tafInfo = getTonieInfo(fullTagPath, false, client_ctx->settings);
+        timelinePath = timelineSidecarPath(tafInfo);
+        freeTonieInfo(tafInfo);
+    }
+    osFreeMem(fullJsonPath);
+    osFreeMem(fullTagPath);
+
+    uint32_t fileSize = 0;
+    char *text = NULL;
+    if (timelinePath != NULL && fsGetFileSize(timelinePath, &fileSize) == NO_ERROR && fileSize > 0 && fileSize <= TIMELINE_MAX_FILE_SIZE)
+    {
+        FsFile *file = fsOpenFile(timelinePath, FS_FILE_MODE_READ);
+        if (file != NULL)
+        {
+            text = osAllocMem(fileSize + 1);
+            size_t total = 0;
+            while (text != NULL && total < fileSize)
+            {
+                size_t got = 0;
+                if (fsReadFile(file, &text[total], fileSize - total, &got) != NO_ERROR || got == 0)
+                {
+                    break;
+                }
+                total += got;
+            }
+            if (text != NULL)
+            {
+                text[total] = '\0';
+            }
+            fsCloseFile(file);
+        }
+    }
+    if (text == NULL)
+    {
+        osFreeMem(timelinePath);
+        return ERROR_NOT_FOUND;
+    }
+
+    cJSON *source = cJSON_Parse(text);
+    osFreeMem(text);
+    const cJSON *entries = cJSON_IsArray(source) ? source : cJSON_GetObjectItem(source, "images");
+    if (!cJSON_IsArray(entries))
+    {
+        TRACE_WARNING("'%s' is no timeline: an \"images\" array is expected\r\n", timelinePath);
+        cJSON_Delete(source);
+        osFreeMem(timelinePath);
+        return ERROR_NOT_FOUND;
+    }
+
+    /* folder of the sidecar, the images are relative to it */
+    char *folder = strdup(timelinePath);
+    char *lastSep = folder ? strrchr(folder, PATH_SEPARATOR) : NULL;
+    if (lastSep != NULL)
+    {
+        *lastSep = '\0';
+    }
+
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "ruid", ruid);
+    cJSON *jsonArray = cJSON_AddArrayToObject(json, "images");
+    size_t count = 0;
+    const cJSON *entry;
+    cJSON_ArrayForEach(entry, entries)
+    {
+        if (count >= TIMELINE_MAX_ENTRIES)
+        {
+            break;
+        }
+        const cJSON *image = cJSON_GetObjectItem(entry, "image");
+        const cJSON *at = cJSON_GetObjectItem(entry, "at");
+        const cJSON *track = cJSON_GetObjectItem(entry, "track");
+        if (at == NULL)
+        {
+            at = cJSON_GetObjectItem(entry, "time");
+        }
+        if (!cJSON_IsString(image) || !timelineImageNameOk(image->valuestring) || !(cJSON_IsNumber(at) || cJSON_IsString(at) || at == NULL))
+        {
+            continue;
+        }
+
+        cJSON *jsonEntry = cJSON_CreateObject();
+        if (cJSON_IsNumber(track) && track->valuedouble >= 1)
+        {
+            cJSON_AddNumberToObject(jsonEntry, "track", (int)track->valuedouble);
+        }
+        if (cJSON_IsString(at))
+        {
+            cJSON_AddStringToObject(jsonEntry, "at", at->valuestring);
+        }
+        else
+        {
+            cJSON_AddNumberToObject(jsonEntry, "at", at ? at->valuedouble : 0);
+        }
+        cJSON_AddStringToObject(jsonEntry, "image", image->valuestring);
+
+        char *imagePath = custom_asprintf("%s%c%s", folder ? folder : "", PATH_SEPARATOR, image->valuestring);
+        for (char *p = imagePath; *p; p++)
+        {
+            if (*p == '/')
+            {
+                *p = PATH_SEPARATOR;
+            }
+        }
+        uint32_t imageSize = 0;
+        char *url = NULL;
+        if (fsGetFileSize(imagePath, &imageSize) == NO_ERROR && imageSize > 0)
+        {
+            url = timelineFileUrl(imagePath, client_ctx->settings);
+        }
+        /* without "url" the picture is missing on the server: the player keeps showing the previous one */
+        if (url != NULL)
+        {
+            cJSON_AddStringToObject(jsonEntry, "url", url);
+            cJSON_AddNumberToObject(jsonEntry, "size", imageSize);
+        }
+        osFreeMem(url);
+        osFreeMem(imagePath);
+
+        cJSON_AddItemToArray(jsonArray, jsonEntry);
+        count++;
+    }
+    cJSON_Delete(source);
+    osFreeMem(folder);
+    osFreeMem(timelinePath);
+
+    char *jsonString = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+
+    httpInitResponseHeader(connection);
+    connection->response.contentType = "text/json";
+    connection->response.contentLength = osStrlen(jsonString);
+
+    return httpWriteResponse(connection, jsonString, connection->response.contentLength, true);
+}
+
 error_t getTagInfoJson(char ruid[17], cJSON *jsonTarget, bool_t validate, client_ctx_t *client_ctx)
 {
     error_t error = NO_ERROR;
@@ -5091,6 +5371,15 @@ error_t getTagInfoJson(char ruid[17], cJSON *jsonTarget, bool_t validate, client
             {
                 cJSON_AddNumberToObject(jsonEntry, "lengthSeconds", tafInfo->additional.track_positions.length);
             }
+
+            char *timelinePath = timelineSidecarPath(tafInfo);
+            if (timelinePath != NULL && fsFileExists(timelinePath))
+            {
+                char *timelineUrl = custom_asprintf("/api/getTagTimeline?ruid=%s&overlay=%s", ruid, client_ctx->settings->internal.overlayUniqueId);
+                cJSON_AddStringToObject(jsonEntry, "timelineUrl", timelineUrl);
+                osFreeMem(timelineUrl);
+            }
+            osFreeMem(timelinePath);
 
             char *downloadUrl = custom_asprintf("/content/download/%s?overlay=%s", tagPath, client_ctx->settings->internal.overlayUniqueId);
             char *audioUrl = custom_asprintf("%s&skip_header=true", downloadUrl);

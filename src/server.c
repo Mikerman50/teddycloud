@@ -165,6 +165,7 @@ request_type_t request_paths[] = {
     {REQ_GET, "/api/trigger", SERTY_WEB, &handleApiTrigger},
     {REQ_GET, "/api/getTagIndex", SERTY_WEB, &handleApiTagIndex},
     {REQ_GET, "/api/getTagInfo", SERTY_WEB, &handleApiTagInfo},
+    {REQ_GET, "/api/getTagTimeline", SERTY_WEB, &handleApiTagTimeline},
     {REQ_GET, "/api/getBoxes", SERTY_WEB, &handleApiGetBoxes},
     {REQ_POST, "/api/assignUnknown", SERTY_WEB, &handleApiAssignUnknown},
     {REQ_GET, "/api/settings/getIndex", SERTY_WEB, &handleApiGetIndex},
