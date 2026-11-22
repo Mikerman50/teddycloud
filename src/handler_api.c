@@ -438,9 +438,92 @@ error_t handleApiGetBoxes(HttpConnection *connection, const char_t *uri, const c
         cJSON_AddStringToObject(jsonEntry, "boxName", settings->boxName);
         cJSON_AddStringToObject(jsonEntry, "boxModel", settings->boxModel); // TODO add color name + url
         cJSON_AddNumberToObject(jsonEntry, "boxVersion", settings->boxVersion);
+        cJSON_AddBoolToObject(jsonEntry, "custom", settings->boxVersion == BOX_CUSTOM);
+        cJSON_AddNumberToObject(jsonEntry, "lastSeen", (double)settings->internal.last_connection);
 
         cJSON_AddItemToArray(jsonArray, jsonEntry);
     }
+
+    char *jsonString = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+
+    httpInitResponseHeader(connection);
+    connection->response.contentType = "text/json";
+    connection->response.contentLength = osStrlen(jsonString);
+
+    return httpWriteResponse(connection, jsonString, connection->response.contentLength, true);
+}
+
+/* A self-built player (not a Toniebox) announces itself, so it is listed next to the boxes and gets its
+   own overlay: POST /api/registerDevice?id=<6-15 of [A-Za-z0-9_-]>[&name=<text>][&model=<text>]
+   See docs/custom-players.md. */
+error_t handleApiRegisterDevice(HttpConnection *connection, const char_t *uri, const char_t *queryString, client_ctx_t *client_ctx)
+{
+    char id[32];
+    char name[128];
+    char model[64];
+    osStrcpy(id, "");
+    osStrcpy(name, "");
+    osStrcpy(model, "");
+
+    const char *message = NULL;
+    uint_t statusCode = 200;
+    settings_t *settings = NULL;
+    bool created = false;
+
+    if (!queryGet(queryString, "id", id, sizeof(id)) || id[0] == '\0')
+    {
+        statusCode = 400;
+        message = "Missing or too long parameter: id";
+    }
+    else
+    {
+        queryGet(queryString, "name", name, sizeof(name));
+        queryGet(queryString, "model", model, sizeof(model));
+        settings = settings_register_device(id, name, model, &created);
+        if (settings == NULL)
+        {
+            size_t len = osStrlen(id);
+            bool valid = len >= 6 && len <= 15;
+            for (size_t i = 0; valid && i < len; i++)
+            {
+                valid = isalnum((unsigned char)id[i]) || id[i] == '_' || id[i] == '-';
+            }
+            if (!valid)
+            {
+                statusCode = 400;
+                message = "Invalid id: 6-15 characters of A-Z, a-z, 0-9, '_' and '-'";
+            }
+            else
+            {
+                statusCode = 409;
+                message = "The id belongs to a Toniebox or no free device slot is left";
+            }
+        }
+    }
+
+    if (settings == NULL)
+    {
+        httpPrepareHeader(connection, "text/plain; charset=utf-8", osStrlen(message));
+        connection->response.statusCode = statusCode;
+        return httpWriteResponseString(connection, (char_t *)message, false);
+    }
+
+    char *ipStr = ipAddrToString(&connection->socket->remoteIpAddr, NULL);
+    settings_set_string_id("internal.ip", ipStr, settings->internal.overlayNumber);
+    settings->internal.last_connection = time(NULL);
+    if (created)
+    {
+        TRACE_INFO("Registered custom player %s (%s) from %s\r\n", settings->internal.overlayUniqueId, settings->boxName, ipStr);
+    }
+
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "ID", settings->internal.overlayUniqueId);
+    cJSON_AddStringToObject(json, "commonName", settings->commonName);
+    cJSON_AddStringToObject(json, "boxName", settings->boxName);
+    cJSON_AddStringToObject(json, "boxModel", settings->boxModel);
+    cJSON_AddNumberToObject(json, "boxVersion", settings->boxVersion);
+    cJSON_AddBoolToObject(json, "created", created);
 
     char *jsonString = cJSON_PrintUnformatted(json);
     cJSON_Delete(json);

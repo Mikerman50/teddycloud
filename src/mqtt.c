@@ -150,6 +150,7 @@ error_t mqtt_sendBoxEvent(const char *eventname, const char *content, client_ctx
     case BOX_TB2:
         osSnprintf(hw, sizeof(hw), "TB2");
         break;
+    case BOX_CUSTOM: /* custom players never connect as a box */
     case BOX_UNKNOWN:
         break;
     }
