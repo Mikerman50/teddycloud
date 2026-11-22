@@ -7,12 +7,12 @@
   HTTPS listener picks a TB1 vs. TB2 certificate.
 - [Web radio streaming](./webradio-streaming.md) — how a stream tag is served
   and its tuning settings.
+- [Tag timeline API](./api/tag-timeline.md) — pictures that follow a story:
+  the `.timeline.json` sidecar of a TAF and `/api/getTagTimeline`.
 - [Random pool](./random-pool.md) - a tag that plays a random TAF of a folder
   or list.
 - [Custom Tonies API](./api/custom-tonies.md) — the `/api/toniesCustomJson*`
   endpoints.
-- [Tag timeline API](./api/tag-timeline.md) — pictures that follow a story:
-  the `.timeline.json` sidecar of a TAF and `/api/getTagTimeline`.
 
 For end-user setup instructions, see the
 [project documentation site](https://toniebox-reverse-engineering.github.io/docs/tools/teddycloud/)
